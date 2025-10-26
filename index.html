@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>QuickNotes — Markdown Notes</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:0;background:#f7fafc;display:flex;min-height:100vh;align-items:flex-start;justify-content:center;padding:24px}
+    .wrap{width:100%;max-width:960px;background:#fff;border-radius:10px;box-shadow:0 6px 20px rgba(2,6,23,.06);display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:16px}
+    textarea{width:100%;height:70vh;border:1px solid #e6edf3;padding:12px;border-radius:8px;font-family:inherit;resize:vertical}
+    .preview{height:70vh;overflow:auto;border:1px solid #e6edf3;padding:12px;border-radius:8px;background:#fff}
+    .toolbar{grid-column:1/-1;display:flex;gap:8px;align-items:center;justify-content:space-between}
+    button{padding:8px 10px;border-radius:8px;border:0;background:#0b69ff;color:#fff;cursor:pointer}
+    .muted{color:#6b7280;font-size:.9rem}
+    input[type=text]{padding:8px;border-radius:8px;border:1px solid #e6edf3;width:320px}
+    .small{font-size:.85rem;color:#6b7280}
+    pre code{white-space:pre-wrap}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <div class="toolbar">
+      <div style="display:flex;gap:8px;align-items:center">
+        <button id="newBtn">New</button>
+        <button id="saveLocal">Save</button>
+        <button id="export">Export .md</button>
+        <button id="import">Import .md</button>
+        <button id="gistSave">Save to Gist</button>
+        <input id="token" type="text" placeholder="GitHub token (optional, for Gist)" />
+      </div>
+      <div class="muted small">Auto-saves locally every 5s</div>
+    </div>
+
+    <textarea id="editor" placeholder="# Title\nWrite Markdown here..."></textarea>
+    <div class="preview" id="preview"></div>
+
+    <input id="fileInput" type="file" accept=".md" style="display:none" />
+  </main>
+
+  <script>
+    // Minimal Markdown renderer (marked-like, lightweight)
+    function escapeHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+    function mdToHtml(md){
+      // headings
+      md = md.replace(/^###### (.*$)/gim,'<h6>$1</h6>')
+             .replace(/^##### (.*$)/gim,'<h5>$1</h5>')
+             .replace(/^#### (.*$)/gim,'<h4>$1</h4>')
+             .replace(/^### (.*$)/gim,'<h3>$1</h3>')
+             .replace(/^## (.*$)/gim,'<h2>$1</h2>')
+             .replace(/^# (.*$)/gim,'<h1>$1</h1>');
+      // code blocks ```
+      md = md.replace(/```([\s\S]*?)```/g, (m,code) => '<pre><code>'+escapeHtml(code)+'</code></pre>');
+      // inline code
+      md = md.replace(/`([^`]+)`/g,'<code>$1</code>');
+      // bold, italic
+      md = md.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
+      md = md.replace(/\*([^*]+)\*/g,'<em>$1</em>');
+      // links
+      md = md.replace(/$$([^$$]+)\]$([^)]+)$/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+      // lists
+      md = md.replace(/^\s*[-*] (.*)/gim,'<li>$1</li>');
+      md = md.replace(/(<li>[\s\S]*?<\/li>)/g, (m) => '<ul>'+m.replace(/<\/li>\s*<li>/g,'</li><li>')+'</ul>');
+      // paragraphs
+      md = md.replace(/^\s*([^\n<].+)\s*$/gim,'<p>$1</p>');
+      return md;
+    }
+
+    const editor = document.getElementById('editor');
+    const preview = document.getElementById('preview');
+    const saveLocal = document.getElementById('saveLocal');
+    const exportBtn = document.getElementById('export');
+    const importBtn = document.getElementById('import');
+    const fileInput = document.getElementById('fileInput');
+    const newBtn = document.getElementById('newBtn');
+    const gistSave = document.getElementById('gistSave');
+    const tokenInput = document.getElementById('token');
+
+    const KEY = 'quicknotes:v1';
+
+    function render(){ preview.innerHTML = mdToHtml(editor.value || ''); }
+
+    // load
+    const saved = localStorage.getItem(KEY);
+    if(saved) editor.value = saved;
+    render();
+
+    editor.addEventListener('input', () => { render(); localStorage.setItem(KEY, editor.value); });
+
+    // auto-save every 5s
+    setInterval(()=> localStorage.setItem(KEY, editor.value), 5000);
+
+    saveLocal.addEventListener('click', ()=> {
+      localStorage.setItem(KEY, editor.value);
+      alert('Saved locally');
+    });
+
+    exportBtn.addEventListener('click', ()=> {
+      const blob = new Blob([editor.value], {type:'text/markdown'});
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'note.md'; a.click();
+    });
+
+    importBtn.addEventListener('click', ()=> fileInput.click());
+    fileInput.addEventListener('change', ()=>{
+      const f = fileInput.files[0]; if(!f) return;
+      const r = new FileReader();
+      r.onload = ()=> { editor.value = r.result; render(); localStorage.setItem(KEY, editor.value); };
+      r.readAsText(f);
+    });
+
+    newBtn.addEventListener('click', ()=> { if(confirm('Discard current note?')) { editor.value=''; render(); localStorage.removeItem(KEY); } });
+
+    // Simple Gist save (creates a public gist). Requires token with gist scope.
+    async function saveGist() {
+      const token = tokenInput.value.trim();
+      if(!token) return alert('Enter a GitHub token with gist scope in the token box.');
+      const content = editor.value;
+      const body = { description: 'QuickNotes export', public: true, files: { 'note.md': { content } } };
+      try {
+        const res = await fetch('https://api.github.com/gists', {
+          method: 'POST',
+          headers: { 'Content-Type':'application/json', 'Authorization': 'token ' + token },
+          body: JSON.stringify(body)
+        });
+        if(!res.ok) throw new Error('Failed to create gist');
+        const data = await res.json();
+        window.open(data.html_url, '_blank');
+      } catch(e){ alert(e.message || 'Error creating gist'); }
+    }
+
+    gistSave.addEventListener('click', ()=> saveGist());
+  </script>
+</body>
+</html>
